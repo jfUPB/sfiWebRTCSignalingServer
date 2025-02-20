@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Demo WebRTC con p5.js (Autoplay remoto)</title>
+  <!-- Socket.io -->
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <!-- p5.js versión 1.11.3 -->
+  <script src="https://cdn.jsdelivr.net/npm/p5@1.11.3/lib/p5.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      background: #222;
+      color: #eee;
+    }
+    #canvasContainer {
+      margin-top: 10px;
+    }
+    #localVideo {
+      width: 320px;
+      height: 240px;
+      border: 1px solid blue;
+      margin-top: 10px;
+    }
+    button {
+      margin-top: 10px;
+      padding: 8px 16px;
+      font-size: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <!-- Contenedor para el canvas de p5.js -->
+  <div id="canvasContainer"></div>
+  <!-- Video local -->
+  <video id="localVideo" muted autoplay playsinline></video>
+  <!-- Video remoto oculto (se renderiza con dimensiones válidas para permitir autoplay) -->
+  <video id="remoteVideo" style="opacity: 0; pointer-events: none;" autoplay playsinline muted></video>
+  <!-- Botón para iniciar la llamada -->
+  <button id="startCallButton">Iniciar Llamada</button>
+
+  <script>
+    let socket = io();
+    let peerConnection;
+    let localStream;
+    // Obtenemos el elemento video remoto (definido en el HTML)
+    const remoteVideo = document.getElementById("remoteVideo");
+    let p5Canvas, ctx;
+    const configuration = {
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" }
+      ]
+    };
+
+    function createPeerConnection() {
+      if (peerConnection) return;
+      peerConnection = new RTCPeerConnection(configuration);
+      console.log("PeerConnection creada.");
+
+      peerConnection.onicegatheringstatechange = function() {
+        console.log("ICE gathering state changed:", this.iceGatheringState);
+      };
+      peerConnection.oniceconnectionstatechange = function() {
+        console.log("ICE connection state changed:", this.iceConnectionState);
+      };
+
+      // Enviar candidatos ICE al servidor
+      setTimeout(() => {
+        peerConnection.onicecandidate = (event) => {
+          if (event.candidate && event.candidate.candidate !== "") {
+            console.log("ICE candidate generado:", event.candidate);
+            socket.emit("candidate", event.candidate);
+          } else {
+            console.log("Fin de candidatos ICE.");
+          }
+        };
+      }, 0);
+
+      // Al recibir el stream remoto, se asigna al video remoto
+      peerConnection.ontrack = (event) => {
+        console.log("Recibiendo stream remoto:", event.streams[0]);
+        remoteVideo.srcObject = event.streams[0];
+      };
+
+      if (localStream) {
+        localStream.getVideoTracks().forEach(track => {
+          peerConnection.addTrack(track, localStream);
+        });
+        console.log("Tracks locales agregadas a PeerConnection.");
+      } else {
+        console.warn("No hay stream local al crear la PeerConnection.");
+      }
+    }
+
+    socket.on("offer", async (offer) => {
+      console.log("Oferta recibida:", offer);
+      if (!peerConnection) createPeerConnection();
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+      socket.emit("answer", answer);
+    });
+
+    socket.on("answer", async (answer) => {
+      console.log("Respuesta recibida:", answer);
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+    });
+
+    socket.on("candidate", async (candidate) => {
+      if (!candidate.candidate) return;
+      console.log("Candidato recibido:", candidate);
+      try {
+        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (e) {
+        console.error("Error agregando candidato ICE:", e);
+      }
+    });
+
+    async function startCall() {
+      console.log("startCall() invocado.");
+      if (!peerConnection) createPeerConnection();
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      socket.emit("offer", offer);
+      console.log("Oferta emitida.");
+    }
+
+    function setup() {
+      p5Canvas = createCanvas(320, 240);
+      p5Canvas.parent("canvasContainer");
+      ctx = p5Canvas.elt.getContext("2d");
+      background(0);
+
+      const localVideoElement = document.getElementById("localVideo");
+      navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+        .then((stream) => {
+          localStream = stream;
+          localVideoElement.srcObject = stream;
+          console.log("Stream local obtenido.");
+          if (!peerConnection) createPeerConnection();
+        })
+        .catch((err) => {
+          console.error("Error al obtener getUserMedia:", err);
+        });
+
+      document.getElementById("startCallButton").addEventListener("click", startCall);
+    }
+
+    function draw() {
+      // Solo dibujamos si el video remoto tiene dimensiones válidas
+      if (remoteVideo && remoteVideo.videoWidth > 0) {
+        ctx.drawImage(remoteVideo, 0, 0, width, height);
+      } else {
+        background(0);
+      }
+    }
+  </script>
+</body>
+</html>

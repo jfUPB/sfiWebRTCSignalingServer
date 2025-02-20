@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Demo WebRTC con Canvas - Con getUserMedia anticipado</title>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <style>
+    body { margin: 0; padding: 0; }
+    #remoteVideo { display: none; }
+    #remoteCanvas {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      margin-top: -240px;
+      margin-left: -320px;
+      border: 1px solid #000;
+    }
+    #localVideo {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      width: 320px;
+      height: 240px;
+      border: 1px solid blue;
+    }
+    button { position: absolute; top: 10px; left: 10px; }
+  </style>
+</head>
+<body>
+  <video id="localVideo" muted autoplay playsinline></video>
+  <video id="remoteVideo" muted playsinline autoplay></video>
+  <canvas id="remoteCanvas" width="640" height="480"></canvas>
+  <button id="startCallButton">Iniciar Llamada</button>
+
+  <script>
+    const socket = io();
+    let peerConnection;
+    let localStream; // Aquí guardaremos el stream local
+    const localVideo = document.getElementById('localVideo');
+    const remoteVideo = document.getElementById('remoteVideo');
+    const remoteCanvas = document.getElementById('remoteCanvas');
+    const canvasContext = remoteCanvas.getContext('2d');
+    const startCallButton = document.getElementById('startCallButton');
+
+    const configuration = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' }
+      ]
+    };
+
+    // Tan pronto carga la página, solicitamos el stream local.
+    window.onload = async () => {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        localVideo.srcObject = localStream;
+        console.log('Stream local obtenido.');
+        // Se crea la conexión ya con las pistas locales disponibles.
+        createPeerConnection();
+      } catch (e) {
+        console.error('Error al obtener getUserMedia:', e);
+      }
+    };
+
+    startCallButton.addEventListener('click', startCall);
+
+    // Al recibir una oferta, se crea la conexión (si aún no existe) y se responde.
+    socket.on('offer', async (offer) => {
+      console.log('Oferta recibida:', offer);
+      if (!peerConnection) {
+        createPeerConnection();
+      }
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+      socket.emit('answer', answer);
+    });
+
+    socket.on('answer', async (answer) => {
+      console.log('Respuesta recibida:', answer);
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+    });
+
+    socket.on('candidate', async (candidate) => {
+      console.log('Candidato recibido:', candidate);
+      try {
+        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (e) {
+        console.error('Error agregando candidato ICE:', e);
+      }
+    });
+
+    function createPeerConnection() {
+      if (peerConnection) return; // Evitamos crearla dos veces
+
+      peerConnection = new RTCPeerConnection(configuration);
+      console.log('PeerConnection creada.');
+
+      // Handlers para estados ICE
+      peerConnection.onicegatheringstatechange = function() {
+        console.log(`ICE gathering state changed: ${this.iceGatheringState}`);
+      };
+      peerConnection.oniceconnectionstatechange = function() {
+        console.log(`ICE connection state changed: ${this.iceConnectionState}`);
+      };
+
+      // Asignamos onicecandidate (tal como en tu código, usando setTimeout para fines de prueba asíncrona)
+      setTimeout(() => {
+        console.log("Asignando handler onicecandidate.");
+        peerConnection.onicecandidate = (event) => {
+          if (event.candidate) {
+            console.log('ICE candidate generated:', event.candidate);
+            socket.emit('candidate', event.candidate);
+          } else {
+            console.log('Fin de candidatos ICE.');
+          }
+        };
+      }, 0);
+
+      // Handler para cuando se recibe el stream remoto
+      peerConnection.ontrack = (event) => {
+        console.log('Recibiendo stream remoto:', event.streams[0]);
+        remoteVideo.srcObject = event.streams[0];
+        function drawRemoteVideoFrame() {
+          if (remoteVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+            canvasContext.drawImage(remoteVideo, 0, 0, remoteCanvas.width, remoteCanvas.height);
+          }
+          requestAnimationFrame(drawRemoteVideoFrame);
+        }
+        drawRemoteVideoFrame();
+        remoteVideo.onloadedmetadata = () => {
+          remoteVideo.play().catch(e => console.error("Error reproduciendo video remoto:", e));
+        };
+      };
+
+      // Si ya contamos con el stream local, agregamos sus pistas a la conexión.
+      if (localStream) {
+        localStream.getVideoTracks().forEach(track => {
+          peerConnection.addTrack(track, localStream);
+        });
+        console.log('Tracks locales agregadas a PeerConnection.');
+      } else {
+        console.warn('No hay stream local al crear la PeerConnection.');
+      }
+    }
+
+    async function startCall() {
+      console.log('Función startCall llamada.');
+      if (!peerConnection) {
+        console.log('PeerConnection no existe, se crea en startCall.');
+        createPeerConnection();
+      }
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      socket.emit('offer', offer);
+      console.log('Offer emitida.');
+    }
+  </script>
+</body>
+</html>

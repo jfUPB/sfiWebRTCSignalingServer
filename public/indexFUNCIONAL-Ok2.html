@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Demo WebRTC - Layout Vertical</title>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <style>
+    /* Usamos Flexbox para organizar el layout en columna */
+    body {
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    /* El canvas que muestra el video remoto se coloca en la parte superior */
+    #remoteCanvas {
+      width: 320px;
+      height: 240px;
+      border: 1px solid #000;
+    }
+    /* El video local se posiciona debajo con un pequeño margen */
+    #localVideo {
+      width: 320px;
+      height: 240px;
+      border: 1px solid blue;
+      margin-top: 10px;
+    }
+    /* El botón se ubica con un margen superior */
+    button {
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <!-- Canvas para el video remoto -->
+  <canvas id="remoteCanvas" width="640" height="480"></canvas>
+  <!-- Video local -->
+  <video id="localVideo" muted autoplay playsinline></video>
+  <button id="startCallButton">Iniciar Llamada</button>
+
+  <script>
+    const socket = io();
+    let peerConnection;
+    let localStream;
+    const localVideo = document.getElementById('localVideo');
+    const remoteCanvas = document.getElementById('remoteCanvas');
+    const canvasContext = remoteCanvas.getContext('2d');
+    const startCallButton = document.getElementById('startCallButton');
+
+    const configuration = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' }
+      ]
+    };
+
+    // Se solicita el stream local tan pronto carga la página
+    window.onload = async () => {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        localVideo.srcObject = localStream;
+        console.log('Stream local obtenido.');
+        createPeerConnection();
+      } catch (e) {
+        console.error('Error al obtener getUserMedia:', e);
+      }
+    };
+
+    startCallButton.addEventListener('click', startCall);
+
+    socket.on('offer', async (offer) => {
+      console.log('Oferta recibida:', offer);
+      if (!peerConnection) {
+        createPeerConnection();
+      }
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+      socket.emit('answer', answer);
+    });
+
+    socket.on('answer', async (answer) => {
+      console.log('Respuesta recibida:', answer);
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+    });
+
+    socket.on('candidate', async (candidate) => {
+      console.log('Candidato recibido:', candidate);
+      try {
+        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (e) {
+        console.error('Error agregando candidato ICE:', e);
+      }
+    });
+
+    function createPeerConnection() {
+      if (peerConnection) return; // Evitamos crearla dos veces
+
+      peerConnection = new RTCPeerConnection(configuration);
+      console.log('PeerConnection creada.');
+
+      // Handlers para estados ICE
+      peerConnection.onicegatheringstatechange = function() {
+        console.log(`ICE gathering state changed: ${this.iceGatheringState}`);
+      };
+      peerConnection.oniceconnectionstatechange = function() {
+        console.log(`ICE connection state changed: ${this.iceConnectionState}`);
+      };
+
+      // Asignamos onicecandidate usando un setTimeout para efectos de prueba
+      setTimeout(() => {
+        console.log("Asignando handler onicecandidate.");
+        peerConnection.onicecandidate = (event) => {
+          if (event.candidate) {
+            console.log('ICE candidate generated:', event.candidate);
+            socket.emit('candidate', event.candidate);
+          } else {
+            console.log('Fin de candidatos ICE.');
+          }
+        };
+      }, 0);
+
+      // Handler para cuando se recibe el stream remoto
+      peerConnection.ontrack = (event) => {
+        console.log('Recibiendo stream remoto:', event.streams[0]);
+        // Dibujamos el video remoto en el canvas
+        const remoteVideo = document.createElement('video');
+        remoteVideo.srcObject = event.streams[0];
+        remoteVideo.muted = true;
+        remoteVideo.playsInline = true;
+        remoteVideo.autoplay = true;
+
+        remoteVideo.onloadedmetadata = () => {
+          remoteVideo.play().catch(e => console.error("Error reproduciendo video remoto:", e));
+        };
+
+        function drawRemoteVideoFrame() {
+          if (remoteVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+            canvasContext.drawImage(remoteVideo, 0, 0, remoteCanvas.width, remoteCanvas.height);
+          }
+          requestAnimationFrame(drawRemoteVideoFrame);
+        }
+        drawRemoteVideoFrame();
+      };
+
+      // Agregamos las pistas locales, si ya están disponibles
+      if (localStream) {
+        localStream.getVideoTracks().forEach(track => {
+          peerConnection.addTrack(track, localStream);
+        });
+        console.log('Tracks locales agregadas a PeerConnection.');
+      } else {
+        console.warn('No hay stream local al crear la PeerConnection.');
+      }
+    }
+
+    async function startCall() {
+      console.log('Función startCall llamada.');
+      if (!peerConnection) {
+        console.log('PeerConnection no existe, se crea en startCall.');
+        createPeerConnection();
+      }
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      socket.emit('offer', offer);
+      console.log('Offer emitida.');
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Demo WebRTC Canvas Puro HTML/JS - Error Handling PC</title>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+        body { margin: 0; padding: 0; }
+        #remoteVideo {
+            display: none;
+        }
+        #remoteCanvas {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            margin-top: -240px;
+            margin-left: -320px;
+            border: 1px solid #000;
+        }
+        #localVideo {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            width: 320px;
+            height: 240px;
+            border: 1px solid blue;
+        }
+        button {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <video id="localVideo" muted autoplay playsinline></video>
+    <video id="remoteVideo" muted playsinline autoplay></video>
+    <canvas id="remoteCanvas" width="640" height="480"></canvas>
+    <button id="startCallButton">Iniciar Llamada</button>
+
+    <script>
+        const socket = io();
+        let peerConnection;
+        const localVideo = document.getElementById('localVideo');
+        const remoteVideo = document.getElementById('remoteVideo');
+        const remoteCanvas = document.getElementById('remoteCanvas');
+        const canvasContext = remoteCanvas.getContext('2d');
+        const startCallButton = document.getElementById('startCallButton');
+
+        const configuration = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' }
+            ]
+        };
+
+        startCallButton.addEventListener('click', startCall);
+
+        socket.on('offer', async (offer) => {
+            console.log('Oferta recibida:', offer);
+            if (!peerConnection) {
+                createPeerConnection();
+            }
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            socket.emit('answer', answer);
+        });
+
+        socket.on('answer', async (answer) => {
+            console.log('Respuesta recibida:', answer);
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        });
+
+        socket.on('candidate', async (candidate) => {
+            console.log('Candidato recibido:', candidate);
+            try {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            } catch (e) {
+                console.error('Error agregando candidato ICE:', e);
+            }
+        });
+
+
+        async function createPeerConnection() {
+            peerConnection = new RTCPeerConnection(configuration);
+            console.log('PeerConnection creado. (onicecandidate Handler Inside)');
+
+            peerConnection.onicegatheringstatechange = function() {
+                console.log(`ICE gathering state changed to: ${this.iceGatheringState} (onicecandidate Handler Inside)`);
+            }.bind(peerConnection);
+
+            peerConnection.oniceconnectionstatechange = function() {
+                console.log(`ICE connection state changed to: ${this.iceConnectionState} (onicecandidate Handler Inside)`);
+            }.bind(peerConnection);
+
+
+            if (typeof peerConnection.onicegatheringstatechange !== 'function') {
+                console.error("ERROR: onicegatheringstatechange is NOT a function after assignment! (onicecandidate Handler Inside)");
+            } else {
+                console.log("onicegatheringstatechange handler assigned OK. (onicecandidate Handler Inside)");
+            }
+
+            if (typeof peerConnection.oniceconnectionstatechange !== 'function') {
+                console.error("ERROR: oniceconnectionstatechange is NOT a function after assignment! (onicecandidate Handler Inside)");
+            } else {
+                console.log("oniceconnectionstatechange handler assigned OK. (onicecandidate Handler Inside)");
+            }
+
+
+            // --- NUEVO: Move peerConnection.onicecandidate assignment EARLIER and wrap in setTimeout ---
+            setTimeout(() => { // Wrap in setTimeout(..., 0) - for async delay test
+                console.log("Setting peerConnection.onicecandidate handler inside setTimeout..."); // Log: Before onicecandidate assignment
+
+                peerConnection.onicecandidate = (event) => { // Moved INSIDE setTimeout
+                    if (event.candidate) {
+                        console.log('ICE candidate generated:', event.candidate);
+                        socket.emit('candidate', event.candidate);
+                    } else {
+                        console.log('End of ICE candidates. (onicecandidate Handler Inside - Detailed Log)');
+                    }
+                };
+                 console.log("peerConnection.onicecandidate handler ASSIGNED (inside setTimeout)."); // Log: After onicecandidate assignment
+            }, 0); // 0ms delay - executes at the end of current event queue
+
+
+            console.log("Attempting to assign peerConnection.ontrack handler AFTER setTimeout..."); // Log: Before ontrack assignment (after setTimeout)
+
+            peerConnection.ontrack = (event) => {
+                console.log('Recibiendo stream remoto:', event.streams[0]);
+                remoteVideo.srcObject = event.streams[0];
+
+                function drawRemoteVideoFrame() {
+                    if (remoteVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+                        console.log("Dibujando frame remoto en canvas (HTML/JS Puro)... readyState:", remoteVideo.readyState, "videoWidth:", remoteVideo.videoWidth, "videoHeight:", remoteVideo.videoHeight);
+                        canvasContext.drawImage(remoteVideo, 0, 0, remoteCanvas.width, remoteCanvas.height);
+                    } else {
+                        console.log("Esperando datos de video remoto... readyState:", remoteVideo.readyState);
+                    }
+                    requestAnimationFrame(drawRemoteVideoFrame);
+                }
+                drawRemoteVideoFrame(); // Iniciar el loop de dibujo
+
+                remoteVideo.onloadedmetadata = () => {
+                    remoteVideo.play().catch(e => console.error("Error playing remote video:", e));
+                };
+            };
+            console.log("peerConnection.ontrack handler ASSIGNED."); // Log: After ontrack assignment
+
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                localVideo.srcObject = stream;
+                stream.getVideoTracks().forEach(track => {
+                    peerConnection.addTrack(track, stream);
+                });
+                 console.log('getUserMedia success and local tracks added. (onicecandidate Handler Inside)');
+            } catch (e) {
+                console.error('getUserMedia error (onicecandidate Handler Inside):', e);
+            }
+             console.log('createPeerConnection() completed SUCCESSFULLY. (onicecandidate Handler Inside - Detailed Log)');
+        }
+
+        async function startCall() {
+            console.log('startCall function called. (Detailed Log)'); // Log: startCall called
+            if (!peerConnection) {
+                console.log('Creating new PeerConnection in startCall (Forcing creation - Detailed Log).'); // Log: PeerConnection creation in startCall
+                try {
+                    await createPeerConnection(); // AWAITING createPeerConnection - CRUCIAL
+                    console.log('createPeerConnection() completed SUCCESSFULLY. (Detailed Log)'); // Log: Success of createPeerConnection
+                } catch (createPcError) {
+                    console.error('ERROR in createPeerConnection():', createPcError); // Log: Error in createPeerConnection
+                    return; // Stop startCall if createPeerConnection fails
+                }
+            } else {
+                 console.log('PeerConnection already exists in startCall. (Detailed Log)'); // Log: PeerConnection exists in startCall
+            }
+
+            console.log('Before createOffer()... (Detailed Log)'); // Log: Before createOffer
+            const offer = await peerConnection.createOffer();
+            console.log('After createOffer(), offer:', offer, ' (Detailed Log)'); // Log: After createOffer and offer object
+
+            console.log('Before setLocalDescription(offer)... (Detailed Log)'); // Log: Before setLocalDescription
+            await peerConnection.setLocalDescription(offer);
+            console.log('After setLocalDescription(offer), localDescription:', peerConnection.localDescription, ' (Detailed Log)'); // Log: After setLocalDescription and localDescription object
+
+            console.log('Emitting offer via socket.emit("offer", offer)... (Detailed Log)'); // Log: Before socket.emit('offer', offer)
+            socket.emit('offer', offer);
+            console.log('Offer emitted via socket.emit("offer", offer). (Detailed Log)'); // Log: After socket.emit('offer', offer)
+        }
+
+        peerConnection.onicecandidate = (event) => {
+            if (event.candidate) {
+                console.log('ICE candidate generated:', event.candidate); // Log: ICE candidate generated
+                socket.emit('candidate', event.candidate);
+                console.log('ICE candidate sent via socket.emit("candidate", event.candidate).'); // Log: ICE candidate sent
+            } else {
+                console.log('End of ICE candidates. (Detailed Log)'); // Log: End of ICE candidates
+            }
+        };
+
+
+        socket.on('answer', async (answer) => {
+            console.log('Respuesta recibida:', answer);
+            console.log('Setting remote description with answer:', answer, ' (Detailed Log)'); // Log: Setting remote description
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+            console.log('Remote description set (answer processed). (Detailed Log)'); // Log: Remote description set
+        });
+
+        socket.on('candidate', async (candidate) => {
+            console.log('Candidato recibido:', candidate);
+            try {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            } catch (e) {
+                console.error('Error agregando candidato ICE:', e);
+            }
+        });
+
+
+        console.log("HTML/JS puro WebRTC con Canvas listo.");
+
+    </script>
+</body>
+</html>

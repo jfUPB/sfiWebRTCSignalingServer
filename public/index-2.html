@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <title>Demo WebRTC con p5.js y Socket.IO</title>
+    <!-- Incluir Socket.IO y p5.js -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/p5@1.11.0/lib/p5.min.js"></script>
+    <script src="sketch.js"></script>
+    <style>
+      body { margin: 0; padding: 0; }
+      /* Posicionar el video remoto fuera de la vista pero permitir que se renderice */
+      #remoteVideo {
+        position: absolute;
+        top: -10000px;
+        left: -10000px;
+        width: 320px;
+        height: 240px;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Elemento para el stream remoto -->
+    <video id="remoteVideo" muted playsinline autoplay></video>
+  </body>
+</html>
